@@ -1,0 +1,53 @@
+---
+title: "network_cleaning"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+# 1. Load the matrix you exported from Python
+# matrix_data <- read_csv("kendrick_similarity_matrix.csv")
+matrix_data <- read_csv("kendrick_openai_matrix.csv")
+full_albums <- read_csv("kendrick_master_dataset.csv")
+```
+
+```{r}
+# When Pandas exports a matrix, the first column containing the names 
+# often gets a weird default name like "...1" or "Unnamed: 0". 
+# Let's rename it to 'Source' for Gephi.
+#colnames(matrix_data)[1] <- "Source"
+
+# 2. Convert the square matrix into a Gephi-friendly Edge List
+edge_list <- matrix_data %>%
+  # This pivots the wide matrix into three columns: Source, Target, and Weight
+  pivot_longer(cols = -Source, names_to = "Target", values_to = "Weight") %>%
+  
+  # Remove self-loops (a song's similarity to itself, which is always 1.0)
+  filter(Source != Target) %>%
+  
+  # Remove duplicate pairs (Song A -> Song B is the same as Song B -> Song A)
+  # This alphabetical sorting trick ensures we only keep one unique edge per pair
+  filter(Source < Target) %>% 
+  
+  # THE HAIRBALL FILTER: Only keep edges where songs are highly similar
+  # You will likely need to tweak this number! 0.70 is a great starting point.
+  filter(Weight >= 0.7) 
+
+# 3. Create the Node List 
+# Gephi requires an 'Id' column. 'Label' is what shows up on the screen.
+node_list <- tibble(
+  Id = unique(c(edge_list$Source, edge_list$Target)),
+  Label = Id
+) %>% 
+  left_join(full_albums, by = c("Id" = "track_name")) %>% 
+  select(-lyrics)
+```
+
+```{r}
+write_csv(edge_list, "gephi_edges.csv")
+write_csv(node_list, "gephi_nodes.csv")
+```
