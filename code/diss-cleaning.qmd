@@ -1,0 +1,123 @@
+---
+title: "diss_cleaning_new"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(tidytext)
+library(widyr)
+library(textstem)
+```
+
+```{r}
+lyrics <- read_csv("../data/diss_tracks.csv")
+kendrick <- lyrics %>% filter(artist == "Kendrick Lamar")
+drake <- lyrics %>% filter(artist == "Drake")
+kendrick_full <- read_csv("../data/kendrick_master_dataset.csv")
+```
+
+```{r}
+kendrick_words <- kendrick %>%
+    unnest_tokens(line, lyrics, token = "regex", pattern = "\n") %>%
+    mutate(line_id = row_number(), chunk_id = ceiling(line_id / 3)) %>%
+    unnest_tokens(word, line)
+
+kendrick_words %>% 
+  group_by(word) %>% 
+  count()
+```
+
+```{r}
+drake_words <- drake %>%
+    unnest_tokens(line, lyrics, token = "regex", pattern = "\n") %>%
+    mutate(line_id = row_number(), chunk_id = ceiling(line_id / 3)) %>%
+    unnest_tokens(word, line)
+
+drake_words %>% 
+  group_by(word) %>% 
+  count()
+```
+
+```{r}
+# 1. Load the SMART academic stopword list
+smart_stops <- stop_words %>% filter(lexicon == "SMART")
+
+# 2. Build the Network Function
+build_artist_network <- function(data, target_artist, edge_file, node_file, words=FALSE) {
+  
+  df_clean <- data %>%
+    filter(str_to_lower(artist) == str_to_lower(target_artist)) %>%
+    mutate(lyrics = str_remove_all(lyrics, "\\[.*?\\]")) %>% 
+    mutate(lyrics = str_remove_all(lyrics, "'s\\b|’s\\b")) %>%
+    mutate(lyrics = str_replace_all(lyrics, "in['’](?![a-zA-Z])", "ing")) %>%
+    mutate(lyrics = str_replace_all(lyrics, "(?<=[a-zA-Z])-(?=[a-zA-Z])", "_"))
+  
+  word_data <- df_clean %>%
+    unnest_tokens(line, lyrics, token = "regex", pattern = "\n") %>%
+    mutate(line_id = row_number(), chunk_id = ceiling(line_id / 3)) %>%
+    unnest_tokens(word, line) %>%
+    mutate(word = lemmatize_words(word)) %>%
+    
+    # Rule 1: Must be 3 characters or longer
+    filter(nchar(word) >= 3) %>%
+    
+    # Rule 3: Apply the SMART Stopword Lexicon
+    anti_join(smart_stops, by = "word") %>%
+    
+    # Rule 4: The Domain-Specific List (Hip-Hop specific filler)
+    # It is standard science to add a SMALL, documented list of industry jargon
+    filter(!word %in% c("yeah", "nigga", "niggas", "gonna", "gotta", "wanna", "cause", "y'all", "ayy", "fuck", "bitch", "shit", "time", "man", "bout", "til", "hey", "huh", "make", "take", "come", "ass", "wop", "gon", "lot", "motherfuck", "tryna", "put", "i'ma", "shoo", "mmm", "ooh", "bee", "niggas'll", "dawg", "give", "woulda", "mm_mm", "ayy_ayy", "should've", "must've", "shit'll", "you're", "baow-baow-baow", "whoop", "bullshit")) %>% 
+    mutate(word = str_replace_all(word, "(?<=[a-zA-Z])_(?=[a-zA-Z])", "-"))
+  
+  # Create the edges
+  word_edges <- word_data %>%
+    pairwise_count(word, line_id, sort = TRUE, upper = FALSE) %>%
+    rename(Source = item1, Target = item2, Weight = n) %>%
+    filter(Weight >= 1) 
+  
+  # Create the nodes
+  word_nodes <- tibble(Id = unique(c(word_edges$Source, word_edges$Target))) %>%
+    mutate(Label = Id) %>%
+    left_join(word_data %>% count(word), by = c("Id" = "word")) %>%
+    rename(Total_Frequency = n)
+  
+  print(nrow(word_nodes))
+  
+  write_csv(word_edges, edge_file)
+  write_csv(word_nodes, node_file)
+  print(paste("Successfully created network files for:", target_artist))
+  if (words) {
+    return(word_nodes) 
+  }
+}
+
+# 3. Load the data and run!
+build_artist_network(lyrics, "Kendrick Lamar", "kendrick_edges.csv", "kendrick_nodes.csv")
+build_artist_network(lyrics, "Drake", "drake_edges.csv", "drake_nodes.csv")
+```
+
+```{r}
+kendrick_words <- build_artist_network(lyrics, "Kendrick Lamar", "kendrick_edges.csv", "kendrick_nodes.csv", words=TRUE)
+drake_words <- build_artist_network(lyrics, "Drake", "drake_edges.csv", "drake_nodes.csv")
+```
+
+```{r}
+kendrick_network <- read_csv("kendrick_network.csv")
+drake_network <- read_csv("drake_network.csv")
+```
+
+```{r}
+kendrick_network %>% 
+  arrange(desc(pageranks)) %>%
+  select(-closnesscentrality, -betweenesscentrality) %>% 
+  head(10)
+```
+
+```{r}
+drake_network %>% 
+  arrange(desc(pageranks)) %>%
+  select(-closnesscentrality, -betweenesscentrality) %>% 
+  head(10)
+```

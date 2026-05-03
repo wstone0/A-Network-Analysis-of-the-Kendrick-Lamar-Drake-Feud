@@ -1,0 +1,240 @@
+---
+title: "Kendrick_Lyrics"
+format: html
+editor: visual
+---
+
+```{r}
+library(geniusr)
+library(tidyverse)
+library(httr)
+library(rvest)
+
+# Set your API token (the one you get from genius.com/api-clients)
+genius_token <- "i7y_xn25vfaNW2mp-EccxzdyENT7OtXmjUlK4-f5lyzT11Vw-AnFBeDEo5AqsJuQ"
+Sys.setenv(GENIUS_API_TOKEN = genius_token)
+```
+
+```{r}
+# Install the patched fork directly from the community member who fixed it
+remotes::install_github("giovanni-cutri/geniusr")
+
+# Reload the library
+library(geniusr)
+library(tidyverse)
+```
+
+```{r}
+lyrics <- read_csv("discog_data.csv")
+```
+
+```{r}
+# Get rid of his first album -- not my favorite
+lyrics_clean <- lyrics %>% 
+  filter(album != "Overly Dedicated")
+```
+
+```{r}
+# Add his newest album and my leak playlist, not included in the Kaggle dataset
+
+# 1. Get the tracklist for GNX
+# This returns a table with song names and IDs
+gnx_tracks <- get_album_tracklist_search(artist_name = "Kendrick Lamar", album_name = "GNX")
+```
+
+```{r}
+# 1. The Fixed Scraper
+scrape_modern_genius <- function(url) {
+  tryCatch({
+    browser_mask <- user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    response <- GET(url, browser_mask)
+    page <- read_html(response)
+    
+    # Using the exact data attribute you found, and the correct text extraction function
+    lyrics <- page %>% 
+      html_elements('div[data-lyrics-container="true"]') %>% 
+      html_text2() %>%  # html_text2() natively handles line breaks correctly
+      paste(collapse = "\n") 
+    
+    return(lyrics)
+  }, error = function(e) {
+    # If it fails, print the actual reason!
+    print(paste("Scrape failed:", e$message))
+    return(NA)
+  }) 
+}
+```
+
+```{r}
+# 1. SCRAPE: Pull the fresh lyrics to get our line breaks back
+gnx_lyrics <- gnx_tracks %>%
+  mutate(lyrics = map_chr(song_lyrics_url, scrape_modern_genius)) %>%
+  filter(!is.na(lyrics) & lyrics != "") %>% 
+  mutate(album = "GNX", popularity = 85) %>%
+  rename(track_name = song_title) %>%
+  mutate(track_name = str_remove(track_name, "\\s?[\\(\\[]?(?i)f(ea)?t\\..*") %>% str_trim()) %>% 
+  select(track_name, album, lyrics, popularity)
+
+# 2. CLEAN: The gentle pipeline
+gnx_nlp_ready <- gnx_lyrics %>%
+  mutate(
+    # A. Chop off the Genius metadata honeypot 
+    # (?s) ensures the regex works across your newly restored line breaks!
+    lyrics = if_else(
+      str_detect(lyrics, "Read More"),
+      str_remove(lyrics, "(?s)^.*?Read More\\s*"), 
+      str_remove(lyrics, "(?s)^.*?Lyrics\\s*")     
+    ),
+    
+    # B. Remove the [Chorus] and [Verse] tags
+    lyrics = str_replace_all(lyrics, "\\[.*?\\]", ""),
+    
+    # C. Fix the smashed words ("teenagerShe" -> "teenager She")
+    lyrics = str_replace_all(lyrics, "([a-z])([A-Z])", "\\1 \\2"),
+    
+    # D. Fix smashed punctuation ("wait!No" -> "wait! No")
+    lyrics = str_replace_all(lyrics, ",([a-zA-Z])", ", \\1"),
+    lyrics = str_replace_all(lyrics, "([.!?)])([a-zA-Z])", "\\1 \\2"),
+    
+    # E. The Gentle Clean (Removes double spaces, leaves \n alone!)
+    lyrics = str_replace_all(lyrics, " {2,}", " ") %>% str_trim(),
+    
+    # Fix acronyms smashed into a capitalized word ("TVMy" -> "TV My")
+    lyrics = str_replace_all(lyrics, "([A-Z])([A-Z][a-z])", "\\1 \\2"),
+    
+    # Fix numbers smashed into letters ("1970The" -> "1970 The")
+    lyrics = str_replace_all(lyrics, "([0-9])([A-Z])", "\\1 \\2"),
+    
+    # Find any sequence of 2 or more line breaks and replace them with just 1
+    lyrics = str_replace_all(lyrics, "\n{2,}", "\n")
+  )
+
+# 3. View the result!
+head(gnx_nlp_ready)
+```
+
+```{r}
+# Creating the leaks dataframe from the playlist
+leaks_tracks <- tibble(
+  song_name = c(
+    "Cartoon and Cereal",
+    "Money Without Me",
+    "Look Out For Detox",
+    "The Jig Is Up (Dump'n)",
+    "Control", 
+    "Westside, Right On Time",
+    "The Heart Pt. 3",
+    "The Heart Part 4",
+    "Black Friday",
+    "I'm Better",
+    "Handsome",
+    "Watch The Party Die",
+    "Abortion Money",
+    "Prayer",
+    "Swimming Pools (Drank)", # Kaggle dataset did not come through here :(
+    "Father Time" # Also had N95 lyrics here, oddly
+  ),
+  song_lyrics_url = c(
+    "https://genius.com/Kendrick-lamar-cartoon-and-cereal-lyrics",
+    "https://genius.com/Kendrick-lamar-money-without-me-lyrics",
+    "https://genius.com/Kendrick-lamar-look-out-for-detox-lyrics",
+    "https://genius.com/Kendrick-lamar-the-jig-is-up-dumpn-lyrics",
+    "https://genius.com/Big-sean-control-lyrics", 
+    "https://genius.com/Kendrick-lamar-westside-right-on-time-lyrics",
+    "https://genius.com/Kendrick-lamar-the-heart-pt-3-will-you-let-it-die-lyrics",
+    "https://genius.com/Kendrick-lamar-the-heart-part-4-lyrics",
+    "https://genius.com/Kendrick-lamar-black-friday-lyrics",
+    "https://genius.com/Kendrick-lamar-im-better-lyrics",
+    "https://genius.com/Kendrick-lamar-handsome-lyrics",
+    "https://genius.com/Kendrick-lamar-watch-the-party-die-lyrics",
+    "https://genius.com/Kendrick-lamar-abortion-money-lyrics",
+    "https://genius.com/Kendrick-lamar-prayer-lyrics",
+    "https://genius.com/Kendrick-lamar-swimming-pools-drank-lyrics",
+    "https://genius.com/Kendrick-lamar-father-time-lyrics"
+  )
+)
+
+# View the table
+print(leaks_tracks)
+```
+
+```{r}
+# 1. RE-SCRAPE: Pull the fresh lyrics to get our line breaks back
+leaks_lyrics <- leaks_tracks %>%
+  mutate(lyrics = map_chr(song_lyrics_url, scrape_modern_genius)) %>%
+  filter(!is.na(lyrics) & lyrics != "") %>% 
+  mutate(album = "NATION", popularity = 85) %>%
+  rename(track_name = song_name) %>%
+  select(track_name, album, lyrics, popularity)
+
+# 2. CLEAN: The gentle pipeline
+leaks_nlp_ready <- leaks_lyrics %>%
+  mutate(
+    # A. Chop off the Genius metadata honeypot 
+    # (?s) ensures the regex works across your newly restored line breaks!
+    lyrics = if_else(
+      str_detect(lyrics, "Read More"),
+      str_remove(lyrics, "(?s)^.*?Read More\\s*"), 
+      str_remove(lyrics, "(?s)^.*?Lyrics\\s*")     
+    ),
+    
+    # B. Remove the [Chorus] and [Verse] tags
+    lyrics = str_replace_all(lyrics, "\\[.*?\\]", ""),
+    
+    # C. Fix the smashed words ("teenagerShe" -> "teenager She")
+    lyrics = str_replace_all(lyrics, "([a-z])([A-Z])", "\\1 \\2"),
+    
+    # D. Fix smashed punctuation ("wait!No" -> "wait! No")
+    lyrics = str_replace_all(lyrics, ",([a-zA-Z])", ", \\1"),
+    lyrics = str_replace_all(lyrics, "([.!?)])([a-zA-Z])", "\\1 \\2"),
+    
+    # E. The Gentle Clean (Removes double spaces, leaves \n alone!)
+    lyrics = str_replace_all(lyrics, " {2,}", " ") %>% str_trim(),
+    
+    # Fix acronyms smashed into a capitalized word ("TVMy" -> "TV My")
+    lyrics = str_replace_all(lyrics, "([A-Z])([A-Z][a-z])", "\\1 \\2"),
+    
+    # Fix numbers smashed into letters ("1970The" -> "1970 The")
+    lyrics = str_replace_all(lyrics, "([0-9])([A-Z])", "\\1 \\2"),
+    
+    # Find any sequence of 2 or more line breaks and replace them with just 1
+    lyrics = str_replace_all(lyrics, "\n{2,}", "\n")
+  )
+
+# 3. View the result!
+head(leaks_nlp_ready)
+```
+
+```{r}
+# Merge the datasets
+leaks_nlp_ready$album[15] = "good kid, m.A.A.d city"
+lyrics_clean$album[87] = "NATION"
+lyrics_clean <- lyrics_clean %>% 
+  filter(track_name != "Swimming Pools") %>% 
+  #filter(album != "Diss Tracks") %>% 
+  #filter(track_name != "The Recipe" & track_name != "Black Boy Fly" & track_name != "Now Or Never" & track_name != "The Heart Part 5" & track_name != "Swimming Pools") %>% 
+  select(track_name, album, lyrics, popularity)
+full_albums <- rbind(lyrics_clean, gnx_nlp_ready, leaks_nlp_ready) %>% 
+  mutate(
+    # "\\S+" tells R to count every cluster of non-whitespace characters as one word
+    word_count = str_count(lyrics, "\\S+")
+  ) %>% 
+  mutate(era = case_when(
+    album %in% c("Section.80", "good kid, m.A.A.d city") ~ "early",
+    album %in% c("To Pimp A Butterfly", "untitled unmastered.", "DAMN.") ~ "middle",
+    album %in% c("Mr. Morale & The Big Steppers", "Diss Tracks", "NATION", "GNX") ~ "late",
+    TRUE ~ "unknown"
+  )) %>% 
+  mutate(era = case_when(
+    Id %in% c("Cartoon and Cereal", "Money Without Me", "Look Out For Detox", 
+              "The Jig Is Up (Dump'n)", "Control", "Westside, Right On Time", 
+              "The Heart Pt. 3") ~ "early",
+    Id %in% c("The Heart Part 4", "Black Friday") ~ "middle",
+    Id %in% c("6:16 in LA", "I'm Better", "Handsome", "Watch The Party Die", 
+              "Abortion Money", "Prayer") ~ "late",
+    TRUE ~ era # Keep the existing era for all other non-NATION tracks
+  ))
+
+# Save to CSV
+write_csv(full_albums, "kendrick_master_dataset.csv")
+```
