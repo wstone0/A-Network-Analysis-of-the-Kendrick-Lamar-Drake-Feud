@@ -25,11 +25,11 @@ library(tidyverse)
 ```
 
 ```{r}
-lyrics <- read_csv("discog_data.csv")
+lyrics <- read_csv("../data/discog_data.csv")
 ```
 
 ```{r}
-# Get rid of his first album -- not my favorite
+# Get rid of his first album
 lyrics_clean <- lyrics %>% 
   filter(album != "Overly Dedicated")
 ```
