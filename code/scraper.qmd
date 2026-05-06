@@ -154,8 +154,75 @@ leaks_tracks <- tibble(
   )
 )
 
-# View the table
-print(leaks_tracks)
+head(leaks_tracks)
+```
+
+```{r}
+drake_disses <- tibble(
+  song_name = c(
+    "Family Matters",
+    "Buried Alive Interlude pt. 2",
+    "Push Ups",
+    "Taylor Made Freestyle",
+    "The Heart Part 6"
+  ),
+  song_lyrics_url = c(
+    "https://genius.com/Drake-family-matters-lyrics",
+    "https://genius.com/Drake-buried-alive-interlude-pt-2-lyrics",
+    "https://genius.com/Drake-push-ups-lyrics",
+    "https://genius.com/Drake-taylor-made-freestyle-lyrics",
+    "https://genius.com/Drake-the-heart-part-6-lyrics"
+  )
+)
+```
+
+```{r}
+# 1. RE-SCRAPE: Pull the fresh lyrics to get our line breaks back
+drake_lyrics <- drake_disses %>%
+  mutate(lyrics = map_chr(song_lyrics_url, scrape_modern_genius)) %>%
+  filter(!is.na(lyrics) & lyrics != "") %>% 
+  rename(track_name = song_name) %>%
+  select(track_name, lyrics)
+
+# 2. CLEAN: The gentle pipeline
+drake_nlp_ready <- drake_lyrics %>%
+  mutate(
+    # A. Chop off the Genius metadata honeypot 
+    # (?s) ensures the regex works across your newly restored line breaks!
+    lyrics = if_else(
+      str_detect(lyrics, "Read More"),
+      str_remove(lyrics, "(?s)^.*?Read More\\s*"), 
+      str_remove(lyrics, "(?s)^.*?Lyrics\\s*")     
+    ),
+    
+    # B. Remove the [Chorus] and [Verse] tags
+    lyrics = str_replace_all(lyrics, "\\[.*?\\]", ""),
+    
+    # C. Fix the smashed words ("teenagerShe" -> "teenager She")
+    lyrics = str_replace_all(lyrics, "([a-z])([A-Z])", "\\1 \\2"),
+    
+    # D. Fix smashed punctuation ("wait!No" -> "wait! No")
+    lyrics = str_replace_all(lyrics, ",([a-zA-Z])", ", \\1"),
+    lyrics = str_replace_all(lyrics, "([.!?)])([a-zA-Z])", "\\1 \\2"),
+    
+    # E. The Gentle Clean (Removes double spaces, leaves \n alone!)
+    lyrics = str_replace_all(lyrics, " {2,}", " ") %>% str_trim(),
+    
+    # Fix acronyms smashed into a capitalized word ("TVMy" -> "TV My")
+    lyrics = str_replace_all(lyrics, "([A-Z])([A-Z][a-z])", "\\1 \\2"),
+    
+    # Fix numbers smashed into letters ("1970The" -> "1970 The")
+    lyrics = str_replace_all(lyrics, "([0-9])([A-Z])", "\\1 \\2"),
+    
+    # Find any sequence of 2 or more line breaks and replace them with just 1
+    lyrics = str_replace_all(lyrics, "\n{2,}", "\n")
+  )
+
+# 3. View the result!
+head(drake_nlp_ready)
+
+# 4. Export
+write_csv(drake_nlp_ready, "drake_lyrics.csv")
 ```
 
 ```{r}
